@@ -194,11 +194,10 @@ class BrozzlerWorker:
     def brozzle_page(self, browser, site, page, on_screenshot=None,
                      on_request=None, enable_youtube_dl=True):
         self.logger.info("brozzling {}".format(page))
-        ydl_fetches = None
         outlinks = set()
         if enable_youtube_dl:
             try:
-                ydl_fetches, outlinks = ydl.do_youtube_dl(self, site, page)
+                outlinks = ydl.do_youtube_dl(self, site, page)
             except brozzler.ReachedLimit as e:
                 raise
             except brozzler.ShutdownRequested:

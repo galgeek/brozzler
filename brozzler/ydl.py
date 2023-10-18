@@ -43,61 +43,12 @@ class ExtraHeaderAdder(urllib.request.BaseHandler):
                 req.add_header(h, v)
         return req
 
-class YoutubeDLSpy(urllib.request.BaseHandler):
-    logger = logging.getLogger(__module__ + "." + __qualname__)
-
-    def __init__(self):
-        self.reset()
-
-    def _http_response(self, request, response):
-        fetch = {
-            'url': request.full_url,
-            'method': request.get_method(),
-            'response_code': response.code,
-            'response_headers': response.headers,
-        }
-        self.fetches.append(fetch)
-        return response
-
-    http_response = https_response = _http_response
-
-    def reset(self):
-        self.fetches = []
-
-def final_bounces(fetches, url):
-    """
-    Resolves redirect chains in `fetches` and returns a list of fetches
-    representing the final redirect destinations of the given url. There could
-    be more than one if for example youtube-dl hit the same url with HEAD and
-    then GET requests.
-    """
-    redirects = {}
-    for fetch in fetches:
-         # XXX check http status 301,302,303,307? check for "uri" header
-         # as well as "location"? see urllib.request.HTTPRedirectHandler
-         if 'location' in fetch['response_headers']:
-             redirects[fetch['url']] = fetch
-
-    final_url = url
-    while final_url in redirects:
-        fetch = redirects.pop(final_url)
-        final_url = urllib.parse.urljoin(
-                fetch['url'], fetch['response_headers']['location'])
-
-    final_bounces = []
-    for fetch in fetches:
-        if fetch['url'] == final_url:
-            final_bounces.append(fetch)
-
-    return final_bounces
-
 def _build_youtube_dl(worker, destdir, site, page):
     '''
     Builds a yt-dlp `youtube_dl.YoutubeDL` for brozzling `site` with `worker`.
 
     The `YoutubeDL` instance does a few special brozzler-specific things:
 
-    - keeps track of urls fetched using a `YoutubeDLSpy`
     - periodically updates `site.last_claimed` in rethinkdb
     - pushes captured video to warcprox using a WARCPROX_WRITE_RECORD request
     - some logging
@@ -272,42 +223,15 @@ def _build_youtube_dl(worker, destdir, site, page):
     ydl = _YoutubeDL(ydl_opts)
     if site.extra_headers():
         ydl._opener.add_handler(ExtraHeaderAdder(site.extra_headers(page)))
-    ydl.fetch_spy = YoutubeDLSpy()
     ydl.pushed_videos = []
-    ydl._opener.add_handler(ydl.fetch_spy)
     return ydl
 
-def _remember_videos(page, fetches, pushed_videos=None):
+def _remember_videos(page, pushed_videos=None):
     '''
     Saves info about videos captured by yt-dlp in `page.videos`.
     '''
     if not 'videos' in page:
         page.videos = []
-    for fetch in fetches or []:
-        content_type = fetch['response_headers'].get_content_type()
-        if (content_type.startswith('video/')
-                # skip manifests of DASH segmented video -
-                # see https://github.com/internetarchive/brozzler/pull/70
-                and content_type != 'video/vnd.mpeg.dash.mpd'
-                and fetch['method'] == 'GET'
-                and fetch['response_code'] in (200, 206)):
-            video = {
-                'blame': 'youtube-dl',
-                'url': fetch['url'],
-                'response_code': fetch['response_code'],
-                'content-type': content_type,
-            }
-            if 'content-length' in fetch['response_headers']:
-                video['content-length'] = int(
-                        fetch['response_headers']['content-length'])
-            if 'content-range' in fetch['response_headers']:
-                # skip chunked youtube video
-                if 'googlevideo.com/videoplayback' in fetch['url']:
-                    continue
-                video['content-range'] = fetch[
-                        'response_headers']['content-range']
-            logging.debug('embedded video %s', video)
-            page.videos.append(video)
     for pushed_video in pushed_videos or []:
         if pushed_video['content-type'].startswith('video/'):
             video = {
@@ -330,7 +254,7 @@ def _try_youtube_dl(worker, ydl, site, page):
             # needs automated test
             # and yt-dlp needs sanitize_info for extract_info
             ie_result = ydl.sanitize_info(ydl.extract_info(str(urlcanon.whatwg(page.url))))
-        _remember_videos(page, ydl.fetch_spy.fetches, ydl.pushed_videos)
+        _remember_videos(page, ydl.pushed_videos)
         if worker._using_warcprox(site):
             info_json = json.dumps(ie_result, sort_keys=True, indent=4)
             logging.info(
@@ -394,4 +318,4 @@ def do_youtube_dl(worker, site, page):
             outlinks = {'https://www.youtube.com/watch?v=%s' % e['id']
                         for e in ie_result.get('entries_no_dl', [])}
         # any outlinks for other cases?
-        return ydl.fetch_spy.fetches, outlinks
+        return outlinks
