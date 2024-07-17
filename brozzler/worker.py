@@ -300,7 +300,7 @@ class BrozzlerWorker:
 
 
     def _needs_browsing(self, page_headers):
-        if "content-type" in page_headers and "html" not in page_headers["content_type"]:
+        if "content-type" in page_headers and "html" not in page_headers["content-type"]:
             return False
         return True
 
